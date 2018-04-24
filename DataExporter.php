@@ -11,8 +11,11 @@
 
 namespace AntQa\DataExporterBundle;
 
-use Knp\Bundle\SnappyBundle\Snappy\LoggableGenerator;
+use Knp\Snappy\Pdf;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\PropertyAccess\Exception\UnexpectedTypeException;
 use Symfony\Component\PropertyAccess\PropertyAccess;
 use Symfony\Component\OptionsResolver\Options;
@@ -53,7 +56,7 @@ class DataExporter
     protected $registredBundles;
 
     /**
-     * @var LoggableGenerator|null
+     * @var Pdf|null
      */
     protected $knpSnappyPdf;
 
@@ -63,6 +66,16 @@ class DataExporter
     protected $templating;
 
     /**
+     * @var int
+     */
+    private $rowNb;
+
+    /**
+     * @var Spreadsheet|null
+     */
+    private $spreadsheet;
+
+    /**
      * @var \Symfony\Component\PropertyAccess\PropertyAccessor
      */
     private $propertyAccessor;
@@ -70,16 +83,17 @@ class DataExporter
     /**
      * @param EngineInterface        $templating
      */
-    public function __construct(EngineInterface $templating)
+    public function __construct()
     {
+        $templating = null;
         $this->templating = $templating;
         $this->propertyAccessor = PropertyAccess::createPropertyAccessor();
     }
 
     /**
-     * @param LoggableGenerator|null $knpSnappyPdf
+     * @param Pdf|null $knpSnappyPdf
      */
-    public function setSnappy(LoggableGenerator $knpSnappyPdf = null)
+    public function setSnappy(Pdf $knpSnappyPdf = null)
     {
         $this->knpSnappyPdf = $knpSnappyPdf;
     }
@@ -107,6 +121,9 @@ class DataExporter
                 break;
             case 'xls':
                 $this->openXLS();
+                break;
+            case 'xlsx':
+                $this->startXLSX();
                 break;
             case 'html':
                 $this->openHTML();
@@ -193,7 +210,7 @@ class DataExporter
                         return null;
                     }
             ]);
-        $resolver->setAllowedValues('format', ['csv', 'xls', 'html', 'xml', 'json', 'pdf', 'listData', 'render']);
+        $resolver->setAllowedValues('format', ['csv', 'xls', 'xlsx', 'html', 'xml', 'json', 'pdf', 'listData', 'render']);
         $resolver
             ->addAllowedTypes('charset', 'string')
             ->addAllowedTypes('fileName', 'string')
@@ -337,6 +354,13 @@ class DataExporter
         return $this;
     }
 
+    private function startXLSX()
+    {
+        $this->spreadsheet = new Spreadsheet();
+
+        return $this;
+    }
+
     /**
      * @return $this
      */
@@ -424,7 +448,7 @@ class DataExporter
             }
         }
         //strip html tags
-        if (in_array($this->getFormat(), ['csv', 'xls'])) {
+        if (in_array($this->getFormat(), ['csv', 'xls', 'xlsx'])) {
             $data = strip_tags($data);
         }
 
@@ -524,6 +548,14 @@ class DataExporter
                 }
                 $this->data .= '</row>';
                 break;
+            case 'xlsx':
+                $data = [];
+                foreach ($tempRow as $val) {
+                    $data[] = $val;
+                }
+
+                $this->spreadsheet->getActiveSheet()->fromArray($data, null, sprintf('%s%s', 'A', $this->rowNb + 1));
+                break;
         }
 
         return true;
@@ -541,9 +573,12 @@ class DataExporter
             throw new \RuntimeException('First use setColumns to set columns to export!');
         }
 
+        $this->rowNb = 1;
+
         foreach ($rows as $row) {
             $this->addRow($row);
             unset($row);
+            ++$this->rowNb;
         }
 
         //close tags
@@ -648,6 +683,8 @@ class DataExporter
             $this->data[0] = array_values($columns);
         } elseif ('listData' === $this->getFormat()) {
             $this->data[0] = array_values($columns);
+        } elseif ('xlsx' === $this->getFormat()) {
+            $this->spreadsheet->getActiveSheet()->fromArray(array_values($columns), null, sprintf('%s%s', 'A', 1));
         }
 
         return $this;
@@ -679,7 +716,8 @@ class DataExporter
      */
     private function prepareCSV()
     {
-        return implode("\n", $this->data);
+        //return implode("\n", $this->data);
+      return chr(239) . chr(187) . chr(191). implode("\n", $this->data);
     }
 
     /**
@@ -744,6 +782,17 @@ class DataExporter
                 unset($this->data[0]);
 
                 return ['columns' => $columns, 'rows' => $this->data];
+                break;
+            case 'xlsx':
+                $writer = new Xlsx($this->spreadsheet);
+
+                $response = new StreamedResponse(function () use ($writer) {
+                    $writer->save('php://output');
+                });
+
+                $response->headers->set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; charset=utf-8');
+                $response->headers->set('Pragma', 'public');
+                break;
         }
 
         if ($this->getInMemory()) {

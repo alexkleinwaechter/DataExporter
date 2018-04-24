@@ -8,6 +8,9 @@ Easy export data to CSV, XML, JSON, Excel, HTML file or into memory.
 
 [Read the Documentation and see examples](https://github.com/antqa/DataExporterBundle/blob/master/Resources/doc/index.md)
 
+This fork:
+- renders German Umlauts in CSV
+- drops the templating engine object in the constructor
 
 License
 -------
